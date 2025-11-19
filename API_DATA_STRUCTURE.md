@@ -204,6 +204,139 @@ class NewsContentBlock(BaseModel):
 
 **响应**: `NewsResponse` 对象
 
+---
+
+### 📖 分页机制详解
+
+#### 🔍 分页逻辑说明
+
+1. **数据来源**: 数据从内存缓存中读取，已按日期倒序排列（最新的在前）
+2. **分页算法**: 
+   ```python
+   start = (page - 1) * page_size
+   end = start + page_size
+   paginated_news = filtered_news[start:end]
+   ```
+3. **总页数计算**: `总页数 = ceil(total / page_size)`
+
+#### ✅ 最后一页数据不足的处理
+
+**当请求的页面超出数据范围或最后一页数据不足时**：
+
+- ✅ **不会报错**：Python 切片操作会自动处理越界情况
+- ✅ **返回实际数据**：返回该页能获取到的所有数据（可能少于 `page_size`）
+- ✅ **空数据处理**：如果 `page` 远超最后一页，返回空数组 `articles: []`
+- ✅ **`has_next` 准确**：通过 `end < total` 判断，确保准确反映是否有下一页
+
+**示例场景**：
+
+假设总共有 156 条新闻，每页 20 条：
+- 第 1-7 页：每页返回 20 条数据
+- **第 8 页**（最后一页）：只返回 16 条数据（156 - 7×20 = 16）
+  - `has_next: false`
+  - `has_prev: true`
+  - `page: 8`
+  - `page_size: 20`
+  - `total: 156`
+  - `articles: [16条数据]`
+- **第 9+ 页**：返回空数组
+  - `has_next: false`
+  - `has_prev: true`
+  - `page: 9`
+  - `page_size: 20`
+  - `total: 156`
+  - `articles: []`
+
+#### 🚀 推荐的分页请求方式
+
+**方式1：基于 `has_next` 判断（推荐）**
+```javascript
+let page = 1;
+const pageSize = 20;
+let allArticles = [];
+
+while (true) {
+    const response = await fetch(`/api/news/?page=${page}&page_size=${pageSize}`);
+    const data = await response.json();
+    
+    allArticles.push(...data.articles);
+    
+    // 关键：通过 has_next 判断是否继续
+    if (!data.has_next) {
+        break;
+    }
+    page++;
+}
+
+console.log(`共加载 ${allArticles.length} 条新闻`);
+```
+
+**方式2：基于总页数计算**
+```javascript
+const pageSize = 20;
+let allArticles = [];
+
+// 第一次请求获取总数
+const firstResponse = await fetch(`/api/news/?page=1&page_size=${pageSize}`);
+const firstData = await firstResponse.json();
+const totalPages = Math.ceil(firstData.total / pageSize);
+
+// 加载所有页
+for (let page = 1; page <= totalPages; page++) {
+    const response = await fetch(`/api/news/?page=${page}&page_size=${pageSize}`);
+    const data = await response.json();
+    allArticles.push(...data.articles);
+}
+
+console.log(`共加载 ${allArticles.length} 条新闻`);
+```
+
+**方式3：并发加载（最快，但请控制并发数）**
+```javascript
+const pageSize = 20;
+
+// 第一次请求获取总数
+const firstResponse = await fetch(`/api/news/?page=1&page_size=${pageSize}`);
+const firstData = await firstResponse.json();
+const totalPages = Math.ceil(firstData.total / pageSize);
+
+// 并发加载所有页（建议限制并发数为 3-5）
+const promises = [];
+for (let page = 1; page <= totalPages; page++) {
+    promises.push(
+        fetch(`/api/news/?page=${page}&page_size=${pageSize}`)
+            .then(res => res.json())
+    );
+}
+
+const results = await Promise.all(promises);
+const allArticles = results.flatMap(data => data.articles);
+
+console.log(`共加载 ${allArticles.length} 条新闻`);
+```
+
+#### ⚠️ 关于 `all=true` 参数的性能说明
+
+- **问题**: 直接请求 `/api/news/?all=true` 会一次性返回所有数据（可能数百条），导致：
+  - 响应时间长（需等待完整数据序列化）
+  - 内存占用大（前端一次性渲染大量数据）
+  - 用户体验差（长时间白屏等待）
+
+- **实现方式**: 
+  ```python
+  if all:
+      # 内部设置 page_size=10000 获取所有数据
+      result = cache.get_news(page=1, page_size=10000, category=category, search=search)
+      result.page_size = result.total  # 返回时显示实际总数
+  ```
+
+- **建议**: 
+  - ✅ 使用分页加载，配合虚拟滚动或无限滚动
+  - ✅ 推荐 `page_size=20` 或 `page_size=50`
+  - ❌ 避免使用 `all=true`，除非数据量很小（<100条）
+
+---
+
 **示例请求**:
 ```bash
 # 获取第1页，每页20条
@@ -212,8 +345,11 @@ curl "http://localhost:8001/api/news/?page=1&page_size=20"
 # 搜索包含"鸿蒙"的新闻
 curl "http://localhost:8001/api/news/?search=鸿蒙"
 
-# 获取"官方动态"分类的所有新闻
-curl "http://localhost:8001/api/news/?category=官方动态&all=true"
+# 获取"官方动态"分类，第2页
+curl "http://localhost:8001/api/news/?category=官方动态&page=2&page_size=20"
+
+# ⚠️ 不推荐：获取所有新闻（可能很慢）
+curl "http://localhost:8001/api/news/?all=true"
 ```
 
 **示例响应**:
