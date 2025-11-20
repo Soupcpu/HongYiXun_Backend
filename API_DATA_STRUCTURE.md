@@ -206,6 +206,74 @@ class NewsContentBlock(BaseModel):
 
 ---
 
+### 🏷️ Category（分类）功能详解
+
+#### 📋 分类机制说明
+
+`category` 参数是新闻接口的**核心过滤功能**，用于按新闻类型筛选数据。
+
+**处理流程**：
+1. **先过滤**：从缓存中筛选出指定 category 的所有文章
+2. **后分页**：对筛选结果进行分页处理
+3. **准确统计**：`total` 返回该 category 的文章总数，`has_next`/`has_prev` 基于过滤后的数据判断
+
+**代码实现**（`core/cache.py`）：
+```python
+# 1. 先按 category 过滤
+if category:
+    filtered_news = [news for news in all_news if news.category == category]
+
+# 2. 再对过滤结果分页
+total = len(filtered_news)  # 过滤后的总数
+start = (page - 1) * page_size
+end = start + page_size
+paginated_news = filtered_news[start:end]
+```
+
+#### 📌 当前可用的 Category 值
+
+| Category 值 | 说明 | 数据源 | 爬虫文件 |
+|------------|------|--------|---------|
+| `"官方动态"` | OpenHarmony 官网新闻公告 | OpenHarmony 官网 | `openharmony_news_crawler.py` |
+| `"技术博客"` | OpenHarmony 官方技术博客文章 | OpenHarmony 技术博客 | `openharmony_blog_crawler.py` |
+
+> **⚠️ 重要**：`category` 是字符串类型，**区分大小写**，必须完全匹配上述值。
+
+#### 🎯 使用示例
+
+**获取所有官方动态**：
+```bash
+# 第1页，每页20条
+GET /api/news/?category=官方动态&page=1&page_size=20
+
+# 搜索官方动态中包含"5.0"的新闻
+GET /api/news/?category=官方动态&search=5.0
+```
+
+**获取所有技术博客**：
+```bash
+# 第1页，每页20条
+GET /api/news/?category=技术博客&page=1&page_size=20
+
+# 获取所有技术博客（不推荐，数据量大）
+GET /api/news/?category=技术博客&all=true
+```
+
+#### ✅ 优势对比
+
+| 方式 | 接口路径 | 分页准确性 | 推荐度 |
+|------|---------|-----------|--------|
+| ✅ 使用 category 参数 | `/api/news/?category=官方动态` | ✅ 准确 | **强烈推荐** |
+| ❌ 使用专用接口 | `/api/news/openharmony` | ❌ 不准确 | 不推荐 |
+
+**为什么推荐使用 category？**
+- ✅ **分页准确**：先过滤后分页，确保每页返回正确数量
+- ✅ **统计准确**：`total` 反映该分类的真实数量
+- ✅ **判断准确**：`has_next` 基于过滤后的数据计算
+- ✅ **性能一致**：与主接口使用相同的缓存机制
+
+---
+
 ### 📖 分页机制详解
 
 #### 🔍 分页逻辑说明
@@ -989,7 +1057,222 @@ source = "huawei!dev"          # ❌ 避免特殊字符
 source = "OpenHarmony"         # ❌ 已被使用
 ```
 
-### 5. 内容结构化建议
+---
+
+### 5. Category 分类规范（⚠️ 必须遵守）
+
+> **🔴 重要提醒**：开发新数据源爬虫时，**必须**为每篇文章设置 `category` 字段，以支持主接口 `/api/news/` 的分类过滤功能。这是确保数据能够正确集成到系统的**强制要求**。
+
+#### 📋 为什么必须支持 category？
+
+主接口 `/api/news/` 使用 `category` 参数作为核心过滤机制：
+- ✅ 用户可以通过 `/api/news/?category=XXX` 筛选特定类型的新闻
+- ✅ 先过滤后分页，确保分页准确性
+- ✅ 统一的数据管理和展示方式
+
+**如果不设置 category**：
+- ❌ 你的数据无法通过主接口的 category 参数筛选
+- ❌ 前端无法正确分类展示你的数据
+- ❌ 与现有数据源不兼容
+
+#### 🎯 如何设置 category
+
+**在爬虫的 `_format_article` 方法中设置**：
+
+```python
+# services/your_crawler.py
+
+class YourCrawler:
+    def _format_article(self, article):
+        """将文章格式化为统一的新闻格式"""
+        import hashlib
+        
+        article_id = hashlib.md5(article['url'].encode()).hexdigest()[:16]
+        
+        return {
+            "id": article_id,
+            "title": article['title'],
+            "date": article.get('date', ''),
+            "url": article['url'],
+            "content": article.get('content', []),
+            "category": "你的分类名称",  # ⚠️ 必须设置
+            "summary": article.get('summary', ''),
+            "source": "你的数据源标识",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+```
+
+#### 📌 Category 命名规范
+
+1. **使用有意义的中文名称**（推荐）或英文名称
+2. **保持简洁**，2-6 个字符为宜
+3. **避免重复**，查看现有 category 值
+4. **区分大小写**，用户请求时必须完全匹配
+
+**当前已使用的 category**：
+| Category | 数据源 | 说明 |
+|----------|--------|------|
+| `"官方动态"` | OpenHarmony 官网 | 官方新闻公告 |
+| `"技术博客"` | OpenHarmony 技术博客 | 技术深度文章 |
+
+**命名建议**：
+```python
+category = "社区动态"    # ✅ 简洁清晰
+category = "开发者分享"  # ✅ 描述性强
+category = "版本发布"    # ✅ 明确分类
+category = "技术教程"    # ✅ 易于理解
+
+category = "官方动态"    # ❌ 已被使用，避免重复
+category = "OpenHarmony官网的最新新闻动态"  # ❌ 太长
+category = "dev-share"   # ⚠️ 可以但不推荐，优先使用中文
+```
+
+#### ✅ 完整示例
+
+以下是一个完整的爬虫示例，展示如何正确设置 category：
+
+```python
+# services/huawei_dev_crawler.py
+
+from typing import List, Dict
+from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
+class HuaweiDevCrawler:
+    """华为开发者社区爬虫"""
+    
+    def __init__(self):
+        self.base_url = "https://developer.huawei.com"
+    
+    def _format_article(self, article):
+        """格式化文章数据"""
+        import hashlib
+        
+        # 生成文章ID
+        article_id = hashlib.md5(article['url'].encode()).hexdigest()[:16]
+        
+        # 返回统一格式 - 注意 category 和 source 的设置
+        return {
+            "id": article_id,
+            "title": article['title'],
+            "date": article.get('date', ''),
+            "url": article['url'],
+            "content": article.get('content', []),
+            "category": "开发者分享",     # ⚠️ 必须设置 category
+            "summary": article.get('summary', ''),
+            "source": "华为开发者社区",    # 数据源标识
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+    
+    def crawl_articles(self, batch_callback=None, batch_size=20) -> List[Dict]:
+        """爬取文章"""
+        articles = []
+        
+        try:
+            # 爬取逻辑...
+            raw_articles = self._fetch_articles()
+            
+            # 格式化每篇文章（包含 category）
+            for raw_article in raw_articles:
+                formatted = self._format_article(raw_article)
+                articles.append(formatted)
+                
+                # 分批回调
+                if batch_callback and len(articles) % batch_size == 0:
+                    batch_callback(articles[-batch_size:])
+            
+            logger.info(f"✅ 爬取完成，共 {len(articles)} 篇文章")
+            return articles
+            
+        except Exception as e:
+            logger.error(f"❌ 爬取失败: {e}")
+            raise
+```
+
+#### 🔗 集成到主接口
+
+设置 category 后，你的数据会自动支持主接口的分类过滤：
+
+```bash
+# 用户可以通过主接口筛选你的数据
+GET /api/news/?category=开发者分享&page=1&page_size=20
+
+# 响应示例
+{
+  "articles": [
+    {
+      "id": "abc123",
+      "title": "HarmonyOS 开发实践",
+      "category": "开发者分享",    # 你设置的 category
+      "source": "华为开发者社区",   # 你设置的 source
+      ...
+    }
+  ],
+  "total": 45,
+  "page": 1,
+  "page_size": 20,
+  "has_next": true,
+  "has_prev": false
+}
+```
+
+#### 📝 集成检查清单
+
+在将新数据源合并到主线之前，请确认：
+
+- [ ] ✅ 每篇文章都设置了 `category` 字段
+- [ ] ✅ `category` 值简洁、有意义、不与现有值重复
+- [ ] ✅ 测试 `/api/news/?category=你的分类名` 能正确返回数据
+- [ ] ✅ 更新 `附录 B. 数据源对照表`，添加你的数据源信息
+- [ ] ✅ 在 PR 描述中说明新增的 category 值及其含义
+
+#### 🚫 常见错误
+
+**错误1：不设置 category**
+```python
+# ❌ 错误示例
+return {
+    "title": "文章标题",
+    "source": "我的数据源",
+    # category 未设置或为 None
+}
+```
+
+**错误2：使用与 source 相同的值**
+```python
+# ❌ 不推荐
+return {
+    "category": "华为开发者社区",  # 与 source 重复
+    "source": "华为开发者社区"
+}
+
+# ✅ 正确做法
+return {
+    "category": "开发者分享",      # 描述内容类型
+    "source": "华为开发者社区"     # 标识数据来源
+}
+```
+
+**错误3：动态生成 category**
+```python
+# ❌ 错误示例：每篇文章的 category 都不同
+return {
+    "category": f"分类_{article_id}",  # 失去分类意义
+}
+
+# ✅ 正确做法：同一数据源的所有文章使用相同的 category
+return {
+    "category": "开发者分享",  # 所有文章统一分类
+}
+```
+
+---
+
+### 7. 内容结构化建议
 
 **如果新数据源的文章内容包含多种类型**，建议使用 `NewsContentBlock` 结构:
 
@@ -1010,7 +1293,7 @@ content = [
 ]
 ```
 
-### 6. 测试新数据源
+### 8. 测试新数据源
 
 **开发完成后，测试以下场景**:
 
@@ -1080,20 +1363,33 @@ curl -X POST "http://localhost:8001/api/yourdatasource/crawl"
 
 ### B. 数据源对照表
 
-| 数据源名称 | source 标识 | category 值 | 接口路径 |
-|-----------|------------|------------|---------|
-| OpenHarmony 官网 | OpenHarmony | 官方动态 | /api/news/openharmony |
-| OpenHarmony 技术博客 | OpenHarmony技术博客 | 技术博客 | /api/news/blog |
-| 官网手机版 Banner | - | - | /api/banner/mobile |
+> **说明**：所有新数据源都必须设置 `category` 字段，以支持主接口 `/api/news/?category=XXX` 的分类过滤功能。
+
+| 数据源名称 | source 标识 | category 值 | 主接口筛选 | 专用接口 |
+|-----------|------------|------------|-----------|---------|
+| OpenHarmony 官网 | OpenHarmony | 官方动态 | `/api/news/?category=官方动态` | `/api/news/openharmony` |
+| OpenHarmony 技术博客 | OpenHarmony技术博客 | 技术博客 | `/api/news/?category=技术博客` | `/api/news/blog` |
+| 官网手机版 Banner | - | - | - | `/api/banner/mobile` |
+
+**添加新数据源时，请更新此表**，格式如下：
+```markdown
+| 你的数据源名称 | 你的source标识 | 你的category值 | `/api/news/?category=你的category值` | `/api/your_path` |
+```
 
 ### C. 快速参考 - API Cheat Sheet
 
 ```bash
-# 新闻 API
-GET  /api/news/                    # 获取所有新闻（分页）
-GET  /api/news/?all=true           # 获取所有新闻（不分页）
-GET  /api/news/openharmony         # 获取官网新闻
-GET  /api/news/blog                # 获取技术博客
+# 新闻 API - 主接口（推荐）
+GET  /api/news/                              # 获取所有新闻（分页）
+GET  /api/news/?category=官方动态             # 按分类筛选（推荐）✅
+GET  /api/news/?category=技术博客             # 按分类筛选（推荐）✅
+GET  /api/news/?search=关键词                 # 搜索新闻
+GET  /api/news/?category=官方动态&search=5.0  # 组合筛选
+GET  /api/news/?all=true                     # 获取所有新闻（不推荐）
+
+# 新闻 API - 其他接口
+GET  /api/news/openharmony         # 获取官网新闻（不推荐，使用category代替）
+GET  /api/news/blog                # 获取技术博客（不推荐，使用category代替）
 GET  /api/news/{id}                # 获取新闻详情
 POST /api/news/crawl               # 手动爬取新闻
 GET  /api/news/status/info         # 获取服务状态
@@ -1110,8 +1406,8 @@ GET    /api/banner/cache           # 查看缓存详情
 
 ---
 
-**文档版本**: v1.0
-**最后更新**: 2025-01-16
+**文档版本**: v1.1
+**最后更新**: 2025-01-20
 **维护者**: XBXyftx
 
 如有疑问，请参考:
